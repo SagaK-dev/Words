@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "check": "node --check app.js && node --check src/scheduler.js && node --check src/storage.js && node --check src/importers.js && node --check src/share.js && node --check functions/api/sync.js"
+    "check": "node --check app.js && node --check sw.js && node --check src/scheduler.js && node --check src/storage.js && node --check src/importers.js && node --check src/share.js && node --check functions/api/sync.js"
   },
   "engines": { "node": ">=22" }
 }
