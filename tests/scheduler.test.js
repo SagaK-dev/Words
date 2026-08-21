@@ -29,3 +29,19 @@ test('review queue only includes cards currently due', () => {
   assert.deepEqual(buildQueue(cards, progress, { mode:'review', count:'all', now }).map(c => c.id), ['a']);
   assert.equal(deckStats(cards, progress, now).new, 1);
 });
+
+test('invalid rating never becomes an accidental Good rating', () => {
+  assert.throws(() => scheduleReview(defaultProgress('a'), Number.NaN, 1000, 1_700_000_000_000), /Rating/);
+  assert.throws(() => scheduleReview(defaultProgress('a'), 3, 1000, 1_700_000_000_000), /Rating/);
+});
+
+test('invalid response time is rejected before it can poison progress', () => {
+  assert.throws(() => scheduleReview(defaultProgress('a'), 2, Number.NaN, 1_700_000_000_000), /Response time/);
+  assert.throws(() => scheduleReview(defaultProgress('a'), 2, -1, 1_700_000_000_000), /Response time/);
+});
+
+test('invalid session count falls back to the complete eligible queue', () => {
+  const cards = [{id:'a'},{id:'b'}];
+  assert.equal(buildQueue(cards, {}, { count: 0 }).length, 2);
+  assert.equal(buildQueue(cards, {}, { count: Number.NaN }).length, 2);
+});
