@@ -110,6 +110,16 @@ The function is in `functions/api/sync.js`.
 
 Losing the passphrase makes the encrypted cloud copy unrecoverable. Cloud sync is unit-tested with a D1-compatible in-memory test double; an actual Cloudflare deployment and live D1 end-to-end test still need to be performed in the target account.
 
+## Secrets and API keys
+
+The current Words implementation does **not** require an external AI/API key. No production credential should ever be committed to this repository or embedded in browser-delivered code.
+
+If a future feature requires OpenAI or another third-party API, keep the key server-side only. On Cloudflare Pages, store the credential in the project's encrypted environment/secrets configuration and read it only from a Pages Function through `context.env`. Do not put secrets in `app.js`, HTML, the service worker, shared URLs, or public client environment variables such as `VITE_*` / `NEXT_PUBLIC_*`.
+
+Local `.env`, `.env.*`, `.dev.vars`, private-key files, service-account JSON, and common credential files are excluded by `.gitignore`. CI runs `npm run security:check` to reject known credential signatures and secret-bearing files before changes are accepted.
+
+The scanner is defense in depth, not a substitute for provider controls. GitHub Secret Scanning and Push Protection should also be enabled in repository settings when available. See `SECURITY.md` for the incident procedure if a credential is ever committed.
+
 ## Deployment
 
 ### Cloudflare Pages
@@ -121,49 +131,60 @@ This project is static and has no build dependency.
 
 Cloudflare Pages will also deploy the optional `functions/` directory.
 
+Any Cloudflare API token used for deployment belongs in the deployment platform or GitHub Actions Secrets. It must not be stored in this repository.
+
 ### Any static host
 
 `index.html`, `app.js`, `styles.css`, `src/`, `manifest.webmanifest`, and `sw.js` can be hosted directly. Cloud sync will simply remain unavailable on hosts that do not provide the Pages Function.
 
 ## Development
 
-Node.js 22+ is used only for tests and syntax checks.
+Node.js 22+ is used only for tests, syntax checks, and the repository secret scan.
 
 ```bash
 npm test
 npm run check
+npm run security:check
+# or run everything:
+npm run verify
 ```
 
 There are no runtime npm dependencies.
 
-The current CI suite covers scheduler input validation, retry scheduling, due-card queue behavior, CSV/TSV parsing, unlimited history retention, exact backup restore, duplicate-ID repair, independent shared-deck copies, share payload validation, sync-key validation, stale-write rejection, and cross-site sync rejection.
+The current CI suite covers scheduler input validation, retry scheduling, due-card queue behavior, CSV/TSV parsing, unlimited history retention, exact backup restore, duplicate-ID repair, independent shared-deck copies, share payload validation, sync-key validation, stale-write rejection, cross-site sync rejection, syntax/manifest validation, and credential leakage checks.
 
 ## Project structure
 
 ```text
 Words/
+├─ .github/workflows/ci.yml
+├─ .gitignore
+├─ SECURITY.md
 ├─ app.js
+├─ icon.svg
 ├─ index.html
-├─ styles.css
 ├─ manifest.webmanifest
+├─ package.json
+├─ schema.sql
+├─ styles.css
 ├─ sw.js
+├─ functions/
+│  └─ api/
+│     └─ sync.js
+├─ scripts/
+│  └─ check-secrets.mjs
 ├─ src/
 │  ├─ importers.js
 │  ├─ samples.js
 │  ├─ scheduler.js
 │  ├─ share.js
 │  └─ storage.js
-├─ functions/
-│  └─ api/
-│     └─ sync.js
-├─ tests/
-│  ├─ importers.test.js
-│  ├─ scheduler.test.js
-│  ├─ share.test.js
-│  ├─ storage.test.js
-│  └─ sync.test.js
-├─ schema.sql
-└─ .github/workflows/ci.yml
+└─ tests/
+   ├─ importers.test.js
+   ├─ scheduler.test.js
+   ├─ share.test.js
+   ├─ storage.test.js
+   └─ sync.test.js
 ```
 
 ## Scope note
