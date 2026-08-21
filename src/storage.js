@@ -37,7 +37,7 @@ export function validateData(value) {
     ...base,
     decks,
     progress,
-    sessions: Array.isArray(value.sessions) ? value.sessions.slice(-500) : [],
+    sessions: Array.isArray(value.sessions) ? value.sessions : [],
     settings,
     sync: value.sync && typeof value.sync === 'object' ? { ...base.sync, ...value.sync } : base.sync,
   };
@@ -64,8 +64,36 @@ export function loadData(storage = globalThis.localStorage) {
 export function saveData(data, storage = globalThis.localStorage) {
   const valid = validateData(data);
   if (!valid) throw new Error('Invalid application data.');
-  storage?.setItem(STORAGE_KEY, JSON.stringify(valid));
+
+  // Never discard historical study sessions during a save. This also protects
+  // users migrating from older builds that kept only a recent session window.
+  if (storage) {
+    try {
+      const existingRaw = storage.getItem(STORAGE_KEY);
+      const existing = existingRaw ? validateData(JSON.parse(existingRaw)) : null;
+      if (existing?.sessions?.length) valid.sessions = mergeSessions(existing.sessions, valid.sessions);
+    } catch {
+      // A corrupt previous value should not prevent saving the newly validated data.
+    }
+    storage.setItem(STORAGE_KEY, JSON.stringify(valid));
+  }
   return valid;
+}
+
+function mergeSessions(existing, incoming) {
+  const merged = new Map();
+  for (const session of [...existing, ...incoming]) {
+    if (!session || typeof session !== 'object') continue;
+    const key = typeof session.id === 'string' && session.id
+      ? `id:${session.id}`
+      : `legacy:${session.startedAt ?? ''}:${session.endedAt ?? ''}:${session.deckId ?? ''}:${session.mode ?? ''}`;
+    merged.set(key, session);
+  }
+  return [...merged.values()].sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0));
+}
+
+export function clearData(storage = globalThis.localStorage) {
+  storage?.removeItem(STORAGE_KEY);
 }
 
 export function createDeck(name, cards = [], extra = {}) {
