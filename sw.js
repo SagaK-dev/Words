@@ -1,9 +1,10 @@
-const CACHE = 'words-v1.1.0';
+const CACHE = 'words-v1.1.1';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
+  './icon.svg',
   './src/scheduler.js',
   './src/storage.js',
   './src/importers.js',
