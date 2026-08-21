@@ -1,0 +1,9 @@
+{
+  "name": "Words — Unlimited Study",
+  "short_name": "Words",
+  "start_url": "./#home",
+  "display": "standalone",
+  "background_color": "#f4f0e8",
+  "theme_color": "#101a18",
+  "icons": []
+}
