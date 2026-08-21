@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Words">
+  <rect width="512" height="512" rx="112" fill="#101a18"/>
+  <path d="M104 128h68l45 210 45-164h60l45 164 45-210h68l-76 256h-68l-44-154-44 154h-68z" fill="#f4f0e8"/>
+  <circle cx="400" cy="112" r="34" fill="#d96f42"/>
+</svg>
