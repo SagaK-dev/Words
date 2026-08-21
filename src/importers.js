@@ -1,3 +1,7 @@
+const MAX_XLSX_ENTRIES = 20_000;
+const MAX_XLSX_ENTRY_BYTES = 128 * 1024 * 1024;
+const MAX_XLSX_TOTAL_BYTES = 256 * 1024 * 1024;
+
 export function parseDelimited(text, delimiter = null) {
   const normalized = String(text).replace(/^\uFEFF/, '');
   const delim = delimiter || detectDelimiter(normalized);
@@ -34,14 +38,14 @@ export function rowsToCards(rows, frontIndex = 0, backIndex = 1, hasHeader = fal
 }
 
 export async function parseXlsx(arrayBuffer) {
+  if (!(arrayBuffer instanceof ArrayBuffer)) throw new Error('XLSX input must be an ArrayBuffer.');
   const files = await unzipXlsx(arrayBuffer);
   const workbookXml = files.get('xl/workbook.xml');
   const relsXml = files.get('xl/_rels/workbook.xml.rels');
   if (!workbookXml || !relsXml) throw new Error('Invalid XLSX workbook.');
   const shared = parseSharedStrings(files.get('xl/sharedStrings.xml') || '');
-  const parser = new DOMParser();
-  const workbook = parser.parseFromString(workbookXml, 'application/xml');
-  const rels = parser.parseFromString(relsXml, 'application/xml');
+  const workbook = parseXml(workbookXml, 'workbook');
+  const rels = parseXml(relsXml, 'relationships');
   const relMap = new Map([...rels.querySelectorAll('Relationship')].map(node => [node.getAttribute('Id'), node.getAttribute('Target')]));
   const sheets = [];
   for (const sheet of workbook.querySelectorAll('sheet')) {
@@ -58,12 +62,12 @@ export async function parseXlsx(arrayBuffer) {
 
 function parseSharedStrings(xml) {
   if (!xml) return [];
-  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  const doc = parseXml(xml, 'shared strings');
   return [...doc.querySelectorAll('si')].map(si => [...si.querySelectorAll('t')].map(t => t.textContent || '').join(''));
 }
 
 function parseWorksheet(xml, shared) {
-  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  const doc = parseXml(xml, 'worksheet');
   const rows = [];
   for (const rowNode of doc.querySelectorAll('sheetData > row')) {
     const row = [];
@@ -82,6 +86,12 @@ function parseWorksheet(xml, shared) {
     rows.push(row.map(value => value ?? ''));
   }
   return rows;
+}
+
+function parseXml(xml, label) {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error(`Invalid XLSX ${label} XML.`);
+  return doc;
 }
 
 function lettersToIndex(letters) {
@@ -107,32 +117,86 @@ async function unzipXlsx(buffer) {
     if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
   }
   if (eocd < 0) throw new Error('Invalid ZIP container.');
+  ensureRange(view, eocd, 22);
   const entries = view.getUint16(eocd + 10, true);
+  if (entries > MAX_XLSX_ENTRIES) throw new Error('XLSX archive has too many ZIP entries.');
   let offset = view.getUint32(eocd + 16, true);
   const decoder = new TextDecoder();
   const files = new Map();
+  let totalUncompressed = 0;
+
   for (let n = 0; n < entries; n += 1) {
+    ensureRange(view, offset, 46);
     if (view.getUint32(offset, true) !== 0x02014b50) throw new Error('Invalid ZIP directory.');
     const method = view.getUint16(offset + 10, true);
     const compressedSize = view.getUint32(offset + 20, true);
+    const uncompressedSize = view.getUint32(offset + 24, true);
     const nameLen = view.getUint16(offset + 28, true);
     const extraLen = view.getUint16(offset + 30, true);
     const commentLen = view.getUint16(offset + 32, true);
     const localOffset = view.getUint32(offset + 42, true);
+    const centralSize = 46 + nameLen + extraLen + commentLen;
+    ensureRange(view, offset, centralSize);
+
+    if (uncompressedSize > MAX_XLSX_ENTRY_BYTES) throw new Error('XLSX entry is too large to expand safely.');
+    totalUncompressed += uncompressedSize;
+    if (totalUncompressed > MAX_XLSX_TOTAL_BYTES) throw new Error('XLSX workbook is too large to expand safely.');
+
     const name = decoder.decode(bytes.slice(offset + 46, offset + 46 + nameLen));
+    ensureRange(view, localOffset, 30);
     if (view.getUint32(localOffset, true) !== 0x04034b50) throw new Error('Invalid ZIP entry.');
     const localNameLen = view.getUint16(localOffset + 26, true);
     const localExtraLen = view.getUint16(localOffset + 28, true);
     const start = localOffset + 30 + localNameLen + localExtraLen;
+    ensureRange(view, start, compressedSize);
     const compressed = bytes.slice(start, start + compressedSize);
+
     let content;
-    if (method === 0) content = compressed;
-    else if (method === 8) {
+    if (method === 0) {
+      if (compressed.byteLength > MAX_XLSX_ENTRY_BYTES) throw new Error('XLSX entry is too large to read safely.');
+      content = compressed;
+    } else if (method === 8) {
+      if (!('DecompressionStream' in globalThis)) throw new Error('This browser cannot decompress XLSX files.');
       const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-      content = new Uint8Array(await new Response(stream).arrayBuffer());
+      content = await readStreamWithLimit(stream, Math.min(MAX_XLSX_ENTRY_BYTES, Math.max(uncompressedSize + 1024, 1024)));
     } else throw new Error(`Unsupported XLSX compression method: ${method}`);
+
+    if (uncompressedSize && content.byteLength !== uncompressedSize) throw new Error('XLSX entry size does not match the ZIP directory.');
     files.set(normalizePath(name), decoder.decode(content));
-    offset += 46 + nameLen + extraLen + commentLen;
+    offset += centralSize;
   }
   return files;
+}
+
+async function readStreamWithLimit(stream, maxBytes) {
+  const reader = stream.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error('XLSX entry expanded beyond its safe size.');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
+
+function ensureRange(view, offset, length) {
+  if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || offset + length > view.byteLength) {
+    throw new Error('Invalid ZIP bounds.');
+  }
 }
